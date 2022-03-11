@@ -2,7 +2,6 @@ package io.debezium.examples.kstreams.fkjoin.streams;
 
 import java.util.Collections;
 import java.util.Map;
-import java.util.function.Function;
 
 import javax.enterprise.context.ApplicationScoped;
 import javax.enterprise.inject.Produces;
@@ -20,7 +19,7 @@ import org.apache.kafka.streams.kstream.Produced;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import io.debezium.examples.kstreams.fkjoin.model.Address;
-import io.debezium.examples.kstreams.fkjoin.model.AddressAndCustomer;
+import io.debezium.examples.kstreams.fkjoin.model.AddressListByCustomerId;
 import io.debezium.examples.kstreams.fkjoin.model.Customer;
 import io.debezium.examples.kstreams.fkjoin.model.CustomerWithAddresses;
 import io.debezium.serde.DebeziumSerdes;
@@ -57,33 +56,44 @@ public class TopologyProducer {
         Serde<Customer> customersSerde = DebeziumSerdes.payloadJson(Customer.class);
         customersSerde.configure(cfgSerde, false);
 
-        JsonbSerde<AddressAndCustomer> addressAndCustomerSerde = new JsonbSerde<>(AddressAndCustomer.class);
+        JsonbSerde<AddressListByCustomerId> addressListByCustomerIdSerde = new JsonbSerde<>(AddressListByCustomerId.class);
+
         JsonbSerde<CustomerWithAddresses> customerWithAddressesSerde = new JsonbSerde<>(CustomerWithAddresses.class);
 
         KTable<Long, Address> addresses = builder.table(
-                addressesTopic,
-                Consumed.with(adressKeySerde, addressSerde)
+            addressesTopic, 
+            Consumed.with(adressKeySerde, addressSerde)
         );
+
+        KTable<Integer, AddressListByCustomerId> addressesByCustomer = addresses
+                //.selectKey((addId, address) -> address.customer_id)
+                .groupBy(
+                (addressId, address) -> KeyValue.pair(address.customer_id, address),    
+                Grouped.with(Serdes.Integer(), addressSerde))
+                .aggregate( 
+                    AddressListByCustomerId::new,
+                    (customerId, address, list) -> list.addAddress(customerId, address),
+                    (customerId, address, list) -> list.removeAddress(address),
+                    Materialized.with(Serdes.Integer(), addressListByCustomerIdSerde)
+                );
+
+        // TODO: remove - just for validation
+        // addressesByCustomer.toStream()
+        //     .to(
+        //         "addresses-by-customer-id",
+        //         Produced.with(Serdes.Integer(), addressListByCustomerIdSerde)
+        //     );
+                
 
         KTable<Integer, Customer> customers = builder.table(
                 customersTopic,
                 Consumed.with(customersKeySerde, customersSerde)
         );
+       
 
-        KTable<Integer, CustomerWithAddresses> customersWithAddresses = addresses.join(
-                customers,
-                address -> address.customer_id,
-                AddressAndCustomer::new,
-                Materialized.with(Serdes.Long(), addressAndCustomerSerde)
-            )
-            .groupBy(
-                (addressId, addressAndCustomer) -> KeyValue.pair(addressAndCustomer.customer.id, addressAndCustomer),
-                Grouped.with(Serdes.Integer(), addressAndCustomerSerde)
-            )
-            .aggregate(
-                CustomerWithAddresses::new,
-                (customerId, addressAndCustomer, aggregate) -> aggregate.addAddress(addressAndCustomer),
-                (customerId, addressAndCustomer, aggregate) -> aggregate.removeAddress(addressAndCustomer),
+        KTable<Integer, CustomerWithAddresses> customersWithAddresses = customers.leftJoin(
+                addressesByCustomer,
+                (cust, apc) -> new CustomerWithAddresses(cust, apc != null? apc.getAddresses(): null),
                 Materialized.with(Serdes.Integer(), customerWithAddressesSerde)
             );
 

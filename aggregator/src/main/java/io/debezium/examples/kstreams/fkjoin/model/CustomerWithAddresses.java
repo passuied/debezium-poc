@@ -1,7 +1,6 @@
 package io.debezium.examples.kstreams.fkjoin.model;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 import org.slf4j.Logger;
@@ -14,29 +13,13 @@ public class CustomerWithAddresses {
     public Customer customer;
     public List<Address> addresses = new ArrayList<>();
 
-    public CustomerWithAddresses addAddress(AddressAndCustomer addressAndCustomer) {
-        LOGGER.info("Adding: " + addressAndCustomer);
-
-        customer = addressAndCustomer.customer;
-        addresses.add(addressAndCustomer.address);
-
-        return this;
+    public CustomerWithAddresses() {
+    }
+    public CustomerWithAddresses(Customer customer, ArrayList<Address> addresses) {
+        this.customer = customer;
+        this.addresses = addresses != null ? addresses : new ArrayList<>();
     }
 
-    public CustomerWithAddresses removeAddress(AddressAndCustomer addressAndCustomer) {
-        LOGGER.info("Removing: " + addressAndCustomer);
-
-        Iterator<Address> it = addresses.iterator();
-        while (it.hasNext()) {
-            Address a = it.next();
-            if (a.id == addressAndCustomer.address.id) {
-                it.remove();
-                break;
-            }
-        }
-
-        return this;
-    }
 
     @Override
     public String toString() {
