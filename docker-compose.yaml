@@ -20,7 +20,7 @@ services:
      - ZOOKEEPER_CONNECT=zookeeper:2181
      - KAFKA_GROUP_MIN_SESSION_TIMEOUT_MS=100
      # For local debugging of aggregator
-     #- ADVERTISED_HOST_NAME=192.168.29.229
+     # - ADVERTISED_HOST_NAME=192.168.29.229
     networks:
     - my-network
 

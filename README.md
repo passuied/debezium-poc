@@ -86,3 +86,6 @@ For that
 * run the *aggregator* app in dev mode, specifying your IP as advertised host, e.g.: `mvn compile quarkus:dev -Dkafka.bootstrap.servers=<YOUR HOST IP>:9092 -Dquarkus.http.port=8079`
 
 Any code changes will immediately picked up after reloading the application in the web browser.
+
+Instructions to debug code: https://suedbroecker.net/2021/04/29/configure-the-attach-debug-for-quarkus-in-visual-studio-code/
+

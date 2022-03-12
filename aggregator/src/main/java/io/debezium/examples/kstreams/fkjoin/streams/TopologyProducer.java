@@ -21,7 +21,10 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import io.debezium.examples.kstreams.fkjoin.model.Address;
 import io.debezium.examples.kstreams.fkjoin.model.AddressListByCustomerId;
 import io.debezium.examples.kstreams.fkjoin.model.Customer;
-import io.debezium.examples.kstreams.fkjoin.model.CustomerWithAddresses;
+import io.debezium.examples.kstreams.fkjoin.model.CustomerAggregate;
+import io.debezium.examples.kstreams.fkjoin.model.Order;
+import io.debezium.examples.kstreams.fkjoin.model.OrderDbz;
+import io.debezium.examples.kstreams.fkjoin.model.OrderListByCustomerId;
 import io.debezium.serde.DebeziumSerdes;
 import io.quarkus.kafka.client.serialization.JsonbSerde;
 import static java.util.Map.entry;
@@ -35,30 +38,27 @@ public class TopologyProducer {
     @ConfigProperty(name = "addresses.topic")
     String addressesTopic;
 
-    @ConfigProperty(name = "customers.with.addresses.topic")
-    String customersWithAddressesTopic;
+    @ConfigProperty(name = "orders.topic")
+    String ordersTopic;
+
+    @ConfigProperty(name = "customers.aggregate.topic")
+    String customersAggregateTopic;
 
     @Produces
     public Topology buildTopology() {
         StreamsBuilder builder = new StreamsBuilder();
 
-        Serde<Long> adressKeySerde = DebeziumSerdes.payloadJson(Long.class);
-        adressKeySerde.configure(Collections.emptyMap(), true);
-        Serde<Address> addressSerde = DebeziumSerdes.payloadJson(Address.class);
         var cfgSerde = Map.ofEntries(
             entry("from.field", "after")
             //, entry("unknown.properties.ignored", "true")
             );
+
+        // Addresses
+        Serde<Long> adressKeySerde = DebeziumSerdes.payloadJson(Long.class);
+        adressKeySerde.configure(Collections.emptyMap(), true);
+        Serde<Address> addressSerde = DebeziumSerdes.payloadJson(Address.class);
         addressSerde.configure(cfgSerde, false);
-
-        Serde<Integer> customersKeySerde = DebeziumSerdes.payloadJson(Integer.class);
-        customersKeySerde.configure(Collections.emptyMap(), true);
-        Serde<Customer> customersSerde = DebeziumSerdes.payloadJson(Customer.class);
-        customersSerde.configure(cfgSerde, false);
-
         JsonbSerde<AddressListByCustomerId> addressListByCustomerIdSerde = new JsonbSerde<>(AddressListByCustomerId.class);
-
-        JsonbSerde<CustomerWithAddresses> customerWithAddressesSerde = new JsonbSerde<>(CustomerWithAddresses.class);
 
         KTable<Long, Address> addresses = builder.table(
             addressesTopic, 
@@ -77,13 +77,36 @@ public class TopologyProducer {
                     Materialized.with(Serdes.Integer(), addressListByCustomerIdSerde)
                 );
 
-        // TODO: remove - just for validation
-        // addressesByCustomer.toStream()
-        //     .to(
-        //         "addresses-by-customer-id",
-        //         Produced.with(Serdes.Integer(), addressListByCustomerIdSerde)
-        //     );
-                
+        // Orders
+        Serde<Integer> orderKeySerde = DebeziumSerdes.payloadJson(Integer.class);
+        orderKeySerde.configure(Collections.emptyMap(), true);
+        Serde<OrderDbz> orderDbzSerde = DebeziumSerdes.payloadJson(OrderDbz.class);
+        orderDbzSerde.configure(cfgSerde, false);
+
+        JsonbSerde<OrderListByCustomerId> orderListByCustomerIdSerde = new JsonbSerde<>(OrderListByCustomerId.class);
+
+        KTable<Integer, OrderDbz> orders = builder.table(
+            ordersTopic, 
+            Consumed.with(orderKeySerde, orderDbzSerde)
+        );
+
+        KTable<Integer, OrderListByCustomerId> ordersByCustomer = orders
+                .groupBy(
+                    (orderId, order) -> KeyValue.pair(order.purchaser, order),    
+                    Grouped.with(Serdes.Integer(), orderDbzSerde))
+                .aggregate( 
+                    OrderListByCustomerId::new,
+                    (customerId, order, list) -> list.addOrder(customerId, new Order(order)),
+                    (customerId, order, list) -> list.removeOrder(new Order(order)),
+                    Materialized.with(Serdes.Integer(), orderListByCustomerIdSerde)
+                );
+
+        // Customers
+        Serde<Integer> customersKeySerde = DebeziumSerdes.payloadJson(Integer.class);
+        customersKeySerde.configure(Collections.emptyMap(), true);
+        Serde<Customer> customersSerde = DebeziumSerdes.payloadJson(Customer.class);
+        customersSerde.configure(cfgSerde, false);
+        JsonbSerde<CustomerAggregate> customerAggregateSerde = new JsonbSerde<>(CustomerAggregate.class);
 
         KTable<Integer, Customer> customers = builder.table(
                 customersTopic,
@@ -91,16 +114,23 @@ public class TopologyProducer {
         );
        
 
-        KTable<Integer, CustomerWithAddresses> customersWithAddresses = customers.leftJoin(
+        KTable<Integer, CustomerAggregate> customersWithAddresses = customers
+            .leftJoin(
                 addressesByCustomer,
-                (cust, apc) -> new CustomerWithAddresses(cust, apc != null? apc.getAddresses(): null),
-                Materialized.with(Serdes.Integer(), customerWithAddressesSerde)
-            );
+                (cust, apc) -> new CustomerAggregate(cust, apc != null? apc.getAddresses(): null, null),
+                Materialized.with(Serdes.Integer(), customerAggregateSerde)
+            )
+            .leftJoin(
+                ordersByCustomer,
+                (aggr, opc) -> new CustomerAggregate(aggr.customer, aggr.addresses, opc != null? opc.getOrders(): null),
+                Materialized.with(Serdes.Integer(), customerAggregateSerde)
+                );
 
+        // save result to topic
         customersWithAddresses.toStream()
         .to(
-                customersWithAddressesTopic,
-                Produced.with(Serdes.Integer(), customerWithAddressesSerde)
+                customersAggregateTopic,
+                Produced.with(Serdes.Integer(), customerAggregateSerde)
         );
 
         return builder.build();
